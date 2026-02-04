@@ -1,0 +1,5 @@
+{
+  "name": "Automation Readiness Checker",
+  "description": "A free tool for SMBs to assess task automation feasibility using a rule-based scoring engine.",
+  "requestFramePermissions": []
+}
