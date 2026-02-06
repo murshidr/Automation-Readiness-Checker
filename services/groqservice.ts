@@ -14,9 +14,6 @@ export interface AIEnhancement {
     suggestedTools: ToolSuggestion[];
 }
 
-/**
- * Call Groq AI to generate reasoning and tool suggestions for a task.
- */
 export async function enhanceWithGroq(
     task: TaskInput,
     criteria: CriteriaScores,
@@ -94,6 +91,7 @@ Respond ONLY with valid JSON, no markdown formatting.`;
         }
 
         const data = await res.json();
+        console.log('Groq API Raw Response:', data);
         const content = data?.choices?.[0]?.message?.content;
 
         if (!content) {

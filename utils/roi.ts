@@ -1,6 +1,5 @@
 import { Frequency } from '../types';
 
-/** Approximate occurrences per month for ROI calculation */
 function monthlyOccurrences(freq: Frequency): number {
   switch (freq) {
     case Frequency.ManyTimesDaily: return 50 * 22;
@@ -19,7 +18,7 @@ export interface TaskROIInput {
 }
 
 /**
- * Estimated monthly value (USD) from automating this task.
+ * Estimated monthly value (
  * @param task - task + score info
  * @param hourlyRate - rate in USD per hour; if null, returns 0
  */

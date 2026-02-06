@@ -14,10 +14,6 @@ export interface GeminiEnhancement {
   suggestedTools: ToolSuggestion[];
 }
 
-/**
- * Call Gemini to generate reasoning and tool suggestions for a task.
- * Returns null if no API key or on error (caller should use rule-based defaults).
- */
 export async function enhanceWithGemini(
   task: TaskInput,
   criteria: CriteriaScores,

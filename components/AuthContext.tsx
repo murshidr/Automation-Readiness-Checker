@@ -13,9 +13,10 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [user, setUser] = useState<User | null>(null);
     const [session, setSession] = useState<Session | null>(null);
     const [loading, setLoading] = useState(true);
+
+    const user = session?.user ?? null;
 
     useEffect(() => {
         if (!isSupabaseConfigured || !supabase) {
@@ -23,17 +24,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             return;
         }
 
-        // Check active session
+        // 1. Check current session
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
-            setUser(session?.user ?? null);
             setLoading(false);
         });
 
-        // Listen for changes
+        // 2. Listen for auth changes (like logging in)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
             setSession(session);
-            setUser(session?.user ?? null);
             setLoading(false);
         });
 
@@ -48,7 +47,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const { error } = await supabase.auth.signInWithOAuth({
             provider: 'google',
             options: {
-                redirectTo: window.location.origin
+                redirectTo: window.location.origin,
+                queryParams: {
+                    access_type: 'offline',
+                    prompt: 'select_account',
+                },
             }
         });
         if (error) {
@@ -66,7 +69,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const signOut = async () => {
         if (!isSupabaseConfigured || !supabase) return;
         await supabase.auth.signOut();
-        setUser(null);
         setSession(null);
     };
 

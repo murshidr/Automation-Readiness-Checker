@@ -101,44 +101,100 @@ export async function getSessionSupabase(
     };
   }
   const currentId = getCurrentSessionId();
+  const { data: authData } = await supabase.auth.getSession();
+  const userId = authData.session?.user?.id || null;
+
   if (currentId) {
-    const sessionRow = await supabase
-      .from('assessment_sessions')
-      .select('*')
-      .eq('id', currentId)
-      .single();
-    if (sessionRow.data) {
-      const { data: tasksData } = await supabase
-        .from('tasks')
+    try {
+
+      const { data: sessionRow, error: sessionError } = await supabase
+        .from('assessment_sessions')
         .select('*')
-        .eq('session_id', currentId);
-      const tasks = (tasksData ?? []).map(taskFromRow);
-      const taskIds = tasks.map(t => t.id);
-      const scores: Record<string, TaskScore> = {};
-      if (taskIds.length > 0) {
-        const { data: scoresData } = await supabase
-          .from('task_scores')
-          .select('*')
-          .in('task_id', taskIds);
-        for (const row of scoresData ?? []) {
-          scores[row.task_id] = scoreFromRow(row);
+        .eq('id', currentId)
+        .single();
+
+      if (sessionError) {
+        if (sessionError.code === 'PGRST116') {
+          console.warn('Session ID not found in Supabase:', currentId);
+          localStorage.removeItem('arc_current_session_id');
+        } else {
+          console.error('Supabase Session Fetch Error:', sessionError);
         }
       }
-      return {
-        token: sessionRow.data.token,
-        createdAt: sessionRow.data.created_at,
-        tasks,
-        scores
-      };
+
+      if (sessionRow) {
+
+        if (userId && !sessionRow.user_id) {
+          console.log('Claiming anonymous session for user:', userId);
+          await supabase
+            .from('assessment_sessions')
+            .update({ user_id: userId })
+            .eq('id', currentId);
+
+          // Also claim tasks and scores if they exist
+          await supabase.from('tasks').update({ user_id: userId }).eq('session_id', currentId).is('user_id', null);
+          await supabase.from('task_scores').update({ user_id: userId }).is('user_id', null).in('task_id',
+            (await supabase.from('tasks').select('id').eq('session_id', currentId)).data?.map(t => t.id) || []
+          );
+        }
+
+
+        const { data: tasksData, error: tasksError } = await supabase
+          .from('tasks')
+          .select('*')
+          .eq('session_id', currentId);
+
+        if (tasksError) {
+          console.error('Supabase Tasks Fetch Error:', tasksError);
+          throw tasksError;
+        }
+
+        console.log(`Fetched ${tasksData?.length || 0} tasks for session ${currentId}`);
+
+        const tasks = (tasksData ?? []).map(taskFromRow);
+        const taskIds = tasks.map(t => t.id);
+        const scores: Record<string, TaskScore> = {};
+
+        if (taskIds.length > 0) {
+          const { data: scoresData, error: scoresError } = await supabase
+            .from('task_scores')
+            .select('*')
+            .in('task_id', taskIds);
+
+          if (scoresError) {
+            console.error('Supabase Scores Fetch Error:', scoresError);
+            throw scoresError;
+          }
+
+          for (const row of scoresData ?? []) {
+            scores[row.task_id] = scoreFromRow(row);
+          }
+        }
+
+        return {
+          token: sessionRow.token,
+          createdAt: sessionRow.created_at,
+          tasks,
+          scores
+        };
+      }
+    } catch (e) {
+      console.warn('Recovering from session fetch error:', e);
+      localStorage.removeItem('arc_current_session_id');
     }
   }
+
+  // Fallback to list or new session
   const list = await getSessionsListSupabase();
+  console.log('Available sessions list:', list);
+
   if (list.length > 0) {
     setCurrentSessionId(list[0].id);
     return getSessionSupabase(getScoringWeights);
   }
-  const newSession = await createNewSessionSupabase();
-  return getSessionSupabase(getScoringWeights);
+
+  console.log('No sessions found, creating new one...');
+  return createNewSessionSupabase();
 }
 
 export async function createNewSessionSupabase(name?: string): Promise<AssessmentSession> {
@@ -152,11 +208,15 @@ export async function createNewSessionSupabase(name?: string): Promise<Assessmen
   }
   const id = uuidv4();
   const token = uuidv4();
+  const { data: authData } = await supabase.auth.getSession();
+  const userId = authData.session?.user?.id || null;
+
   const sessionName = name ?? `Assessment ${(await getSessionsListSupabase()).length + 1}`;
   const { error } = await supabase.from('assessment_sessions').insert({
     id,
     name: sessionName,
     token,
+    user_id: userId,
     created_at: new Date().toISOString()
   });
   if (error) throw error;
@@ -202,10 +262,14 @@ export async function addTaskToSessionSupabase(
   }
   const currentId = getCurrentSessionId();
   if (!currentId) throw new Error('No current session');
+  const { data: authData } = await supabase.auth.getSession();
+  const userId = authData.session?.user?.id || null;
   const score = scoreTask(task, getScoringWeights());
+
   await supabase.from('tasks').insert({
     id: task.id,
     session_id: currentId,
+    user_id: userId,
     name: task.name,
     department: task.department,
     description: task.description,
@@ -216,6 +280,7 @@ export async function addTaskToSessionSupabase(
   });
   await supabase.from('task_scores').insert({
     task_id: task.id,
+    user_id: userId,
     criteria_scores: score.criteriaScores,
     final_score: score.finalScore,
     category: score.category,
@@ -236,7 +301,10 @@ export async function updateTaskInSessionSupabase(
   }
   const currentId = getCurrentSessionId();
   if (!currentId) throw new Error('No current session');
+  const { data: authData } = await supabase.auth.getSession();
+  const userId = authData.session?.user?.id || null;
   const score = scoreTask(updatedTask, getScoringWeights());
+
   await supabase
     .from('tasks')
     .update({
@@ -246,7 +314,8 @@ export async function updateTaskInSessionSupabase(
       frequency: updatedTask.frequency,
       time_per_task: updatedTask.timePerTask,
       inputs: updatedTask.inputs,
-      outputs: updatedTask.outputs
+      outputs: updatedTask.outputs,
+      user_id: userId
     })
     .eq('id', taskId)
     .eq('session_id', currentId);
@@ -258,7 +327,8 @@ export async function updateTaskInSessionSupabase(
       category: score.category,
       reasoning: score.reasoning,
       automation_advice: score.automationAdvice,
-      suggested_tools: score.suggestedTools
+      suggested_tools: score.suggestedTools,
+      user_id: userId
     })
     .eq('task_id', taskId);
   return getSessionSupabase(getScoringWeights);
@@ -280,16 +350,28 @@ export async function updateScoreInsightSupabase(
   update: { reasoning: string; automationAdvice?: string; suggestedTools: ToolSuggestion[] },
   getScoringWeights: () => ScoringWeights
 ): Promise<AssessmentSession | null> {
-  if (!supabase || !isSupabaseConfigured) return null;
+  const { data: authData } = await supabase.auth.getSession();
+  const userId = authData.session?.user?.id || null;
+  console.log('Updating score insight for task:', taskId, 'user:', userId);
+
   const { error } = await supabase
     .from('task_scores')
     .update({
       reasoning: update.reasoning,
       automation_advice: update.automationAdvice ?? '',
-      suggested_tools: update.suggestedTools
+      suggested_tools: update.suggestedTools,
+      user_id: userId
     })
     .eq('task_id', taskId);
-  if (error) return null;
+  if (error) {
+    console.error('Update Score Insight Error Details:', {
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+      code: error.code
+    });
+    return null;
+  }
   return getSessionSupabase(getScoringWeights);
 }
 
